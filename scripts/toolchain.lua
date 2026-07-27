@@ -551,7 +551,7 @@ function toolchain(_buildDir, _libDir)
 			"-Wno-tautological-constant-compare",
 		}
 
-	configuration { "vs*", "not NX32", "not NX64" }
+	configuration { "vs*", "not ARM64", "not NX32", "not NX64" }
 		flags {
 			"EnableAVX",
 		}
