@@ -357,7 +357,10 @@ namespace bx
 		const float absA   = abs(aa);
 		const float cosA   = cos(absA);
 		const float cosASq = square(cosA);
-		const float tmp0   = sqrt(1.0f - cosASq);
+		// Note: cos is an approximation, and under fast-math it can return a
+		// value marginally above 1.0, which makes 1.0 - cosASq negative and
+		// sqrt produce NaN. Clamp to keep the domain valid.
+		const float tmp0   = sqrt(max(0.0f, 1.0f - cosASq) );
 		const float tmp1   = aa > 0.0f && aa < kPi ? 1.0f : -1.0f;
 		const float sinA   = mul(tmp0, tmp1);
 
