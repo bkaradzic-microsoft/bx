@@ -120,6 +120,28 @@ namespace bx
 		char m_filePath[kMaxFilePath];
 	};
 
+	/// True if file names are case sensitive by platform convention.
+	///
+	/// This reflects the platform convention rather than the file system actually in use,
+	/// which on both Windows and macOS can be configured either way.
+	///
+	constexpr bool kFilePathCaseSensitive = !BX_PLATFORM_WINDOWS;
+
+	/// Returns true if two file paths are equal.
+	///
+	/// Paths are compared as normalized by `FilePath`, so `a//b/../b/c` and `a/b/c` are
+	/// equal. No file system is accessed, thus links and mount points that alias the same
+	/// file are not resolved.
+	///
+	/// @param[in] _lhs Left-hand side file path.
+	/// @param[in] _rhs Right-hand side file path.
+	/// @param[in] _caseSensitive Use case sensitive comparison if true.
+	///
+	template<typename Ty>
+	EnableIfType<isSame<Ty, FilePath>(), bool> isEqual(const Ty& _lhs, const Ty& _rhs, bool _caseSensitive = kFilePathCaseSensitive);
+
 } // namespace bx
+
+#include "inline/filepath.inl"
 
 #endif // BX_FILEPATH_H_HEADER_GUARD

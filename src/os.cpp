@@ -4,6 +4,7 @@
  */
 
 #include <bx/string.h>
+#include <bx/mutex.h>
 #include <bx/os.h>
 
 #if BX_CRT_MSVC
@@ -150,10 +151,25 @@ namespace bx
 #endif // BX_PLATFORM_*
 	}
 
-	void* dlopen(const FilePath& _filePath)
+	constexpr int32_t kDlSearchPathMax = 8;
+
+	static void* dlopenImpl(const char* _filePath)
 	{
 #if BX_PLATFORM_WINDOWS
-		return (void*)::LoadLibraryA(_filePath.getCPtr() );
+		// LOAD_LIBRARY_SEARCH_DEFAULT_DIRS searches the application directory, directories
+		// added with AddDllDirectory, and System32. Unlike the legacy search order used by
+		// LoadLibrary it excludes the current working directory and %PATH%.
+		HMODULE handle = ::LoadLibraryExA(_filePath, NULL, LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
+
+		if (NULL == handle
+		&&  ERROR_INVALID_PARAMETER == ::GetLastError() )
+		{
+			// LOAD_LIBRARY_SEARCH_* flags require KB2533623 on Windows 7. Without this
+			// fallback loading anything would fail outright on an unpatched system.
+			handle = ::LoadLibraryA(_filePath);
+		}
+
+		return (void*)handle;
 #elif  BX_PLATFORM_EMSCRIPTEN \
 	|| BX_PLATFORM_PS4        \
 	|| BX_PLATFORM_XBOXONE    \
@@ -163,10 +179,159 @@ namespace bx
 		BX_UNUSED(_filePath);
 		return NULL;
 #else
-		void* so = ::dlopen(_filePath.getCPtr(), RTLD_LOCAL|RTLD_LAZY);
-		BX_WARN(NULL != so, "dlopen failed: \"%s\".", ::dlerror() );
-		return so;
+		return ::dlopen(_filePath, RTLD_LOCAL|RTLD_LAZY);
 #endif // BX_PLATFORM_
+	}
+
+	static const char* dlerrorImpl()
+	{
+#if  BX_PLATFORM_WINDOWS   \
+	|| BX_PLATFORM_EMSCRIPTEN \
+	|| BX_PLATFORM_PS4        \
+	|| BX_PLATFORM_XBOXONE    \
+	|| BX_PLATFORM_WINRT      \
+	|| BX_PLATFORM_NX         \
+	|| BX_CRT_NONE
+		return "";
+#else
+		const char* err = ::dlerror();
+		return NULL != err ? err : "";
+#endif // BX_PLATFORM_
+	}
+
+	struct DlContext
+	{
+		static FilePath resolve(const FilePath& _filePath)
+		{
+			if (_filePath.isAbsolute() )
+			{
+				return _filePath;
+			}
+
+			FilePath filePath(Dir::Current);
+			filePath.join(_filePath);
+
+			return filePath;
+		}
+
+		bool getSearchPath(FilePath& _outFilePath, int32_t _idx)
+		{
+			MutexScope lock(m_mutex);
+
+			if (_idx >= m_num)
+			{
+				return false;
+			}
+
+			_outFilePath = m_searchPath[_idx];
+
+			return true;
+		}
+
+		bool addSearchPath(const FilePath& _filePath)
+		{
+			const FilePath filePath = resolve(_filePath);
+
+			MutexScope lock(m_mutex);
+
+			for (int32_t ii = 0; ii < m_num; ++ii)
+			{
+				if (isEqual(m_searchPath[ii], filePath) )
+				{
+					return false;
+				}
+			}
+
+			if (kDlSearchPathMax == m_num)
+			{
+				BX_WARN(false, "dlSearchPathAdd failed, search path is full (max %d).", kDlSearchPathMax);
+				return false;
+			}
+
+			m_searchPath[m_num] = filePath;
+			++m_num;
+
+			return true;
+		}
+
+		bool removeSearchPath(const FilePath& _filePath)
+		{
+			const FilePath filePath = resolve(_filePath);
+
+			MutexScope lock(m_mutex);
+
+			for (int32_t ii = 0; ii < m_num; ++ii)
+			{
+				if (isEqual(m_searchPath[ii], filePath) )
+				{
+					--m_num;
+
+					// Shift down to keep the order in which directories were added.
+					for (int32_t jj = ii; jj < m_num; ++jj)
+					{
+						m_searchPath[jj] = m_searchPath[jj+1];
+					}
+
+					return true;
+				}
+			}
+
+			return false;
+		}
+
+		void* open(const FilePath& _filePath)
+		{
+			if (!_filePath.isAbsolute() )
+			{
+				// The lock is intentionally not held across the load. On Windows DllMain
+				// runs under the loader lock, and taking a bx mutex under it would invite
+				// lock order inversion.
+				for (int32_t ii = 0; ; ++ii)
+				{
+					FilePath filePath;
+
+					if (!getSearchPath(filePath, ii) )
+					{
+						break;
+					}
+
+					filePath.join(_filePath);
+
+					void* handle = dlopenImpl(filePath.getCPtr() );
+
+					if (NULL != handle)
+					{
+						return handle;
+					}
+				}
+			}
+
+			void* handle = dlopenImpl(_filePath.getCPtr() );
+			BX_WARN(NULL != handle, "dlopen failed: \"%s\" %s", _filePath.getCPtr(), dlerrorImpl() );
+
+			return handle;
+		}
+
+		Mutex    m_mutex;
+		FilePath m_searchPath[kDlSearchPathMax];
+		int32_t  m_num = 0;
+	};
+
+	static DlContext s_dlCtx;
+
+	void* dlopen(const FilePath& _filePath)
+	{
+		return s_dlCtx.open(_filePath);
+	}
+
+	bool dlSearchPathAdd(const FilePath& _filePath)
+	{
+		return s_dlCtx.addSearchPath(_filePath);
+	}
+
+	bool dlSearchPathRemove(const FilePath& _filePath)
+	{
+		return s_dlCtx.removeSearchPath(_filePath);
 	}
 
 	void dlclose(void* _handle)

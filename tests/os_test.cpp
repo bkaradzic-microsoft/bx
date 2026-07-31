@@ -6,6 +6,7 @@
 #include "test.h"
 #include <bx/os.h>
 #include <bx/semaphore.h>
+#include <bx/string.h>
 #include <bx/timer.h>
 
 TEST_CASE("getProcessMemoryUsed", "[os]")
@@ -16,6 +17,93 @@ TEST_CASE("getProcessMemoryUsed", "[os]")
 	}
 
 	REQUIRE(0 != bx::getProcessMemoryUsed() );
+}
+
+TEST_CASE("dlSearchPath-add-remove", "[os]")
+{
+	const bx::FilePath tmp(bx::Dir::Temp);
+
+	// Removing something that was never added must fail.
+	REQUIRE(!bx::dlSearchPathRemove(tmp) );
+
+	REQUIRE(bx::dlSearchPathAdd(tmp) );
+
+	// Duplicates are rejected.
+	REQUIRE(!bx::dlSearchPathAdd(tmp) );
+
+	REQUIRE(bx::dlSearchPathRemove(tmp) );
+	REQUIRE(!bx::dlSearchPathRemove(tmp) );
+}
+
+TEST_CASE("dlSearchPath-relative-is-resolved", "[os]")
+{
+	// Relative paths are resolved against the current working directory when they are
+	// added, so adding "." and removing the absolute CWD must refer to the same entry.
+	const bx::FilePath cwd(bx::Dir::Current);
+
+	REQUIRE(bx::dlSearchPathAdd(bx::FilePath(".") ) );
+	REQUIRE(!bx::dlSearchPathAdd(cwd) );
+	REQUIRE(bx::dlSearchPathRemove(cwd) );
+	REQUIRE(!bx::dlSearchPathRemove(bx::FilePath(".") ) );
+}
+
+TEST_CASE("dlSearchPath-capacity", "[os]")
+{
+	const bx::FilePath tmp(bx::Dir::Temp);
+
+	char name[64];
+	int32_t num = 0;
+
+	for (; num < 64; ++num)
+	{
+		bx::FilePath filePath(tmp);
+		bx::snprintf(name, sizeof(name), "bx_dl_search_path_%d", num);
+		filePath.join(name);
+
+		if (!bx::dlSearchPathAdd(filePath) )
+		{
+			break;
+		}
+	}
+
+	// Search path is bounded, but it has to hold at least a few entries.
+	REQUIRE(1 < num);
+	REQUIRE(64 > num);
+
+	for (int32_t ii = 0; ii < num; ++ii)
+	{
+		bx::FilePath filePath(tmp);
+		bx::snprintf(name, sizeof(name), "bx_dl_search_path_%d", ii);
+		filePath.join(name);
+
+		REQUIRE(bx::dlSearchPathRemove(filePath) );
+	}
+}
+
+TEST_CASE("dlopen-missing", "[os]")
+{
+	REQUIRE(NULL == bx::dlopen(bx::FilePath("bx-no-such-library." BX_DL_EXT) ) );
+
+	// Registered search paths must not change the outcome for a library that doesn't exist.
+	const bx::FilePath tmp(bx::Dir::Temp);
+	REQUIRE(bx::dlSearchPathAdd(tmp) );
+	REQUIRE(NULL == bx::dlopen(bx::FilePath("bx-no-such-library." BX_DL_EXT) ) );
+	REQUIRE(bx::dlSearchPathRemove(tmp) );
+}
+
+TEST_CASE("dlopen-system-library", "[os]")
+{
+	if (!BX_ENABLED(BX_PLATFORM_WINDOWS) )
+	{
+		SKIP("Test is Windows specific.");
+	}
+
+	// LOAD_LIBRARY_SEARCH_DEFAULT_DIRS still includes System32, so this has to resolve.
+	void* handle = bx::dlopen(bx::FilePath("kernel32.dll") );
+	REQUIRE(NULL != handle);
+	REQUIRE(NULL != bx::dlsym(handle, "GetProcAddress") );
+
+	bx::dlclose(handle);
 }
 
 #if BX_CONFIG_SUPPORTS_THREADING

@@ -81,10 +81,39 @@ namespace bx
 
 	/// Open a dynamic library.
 	///
+	/// If `_filePath` is not absolute, directories added with `dlSearchPathAdd` are searched
+	/// first, in the order they were added, and the OS default search order is used as
+	/// fallback.
+	///
+	/// The OS default search order doesn't include the current working directory. Use
+	/// `dlSearchPathAdd` to opt back in. Note that on macOS dyld will still search the
+	/// current working directory for unrestricted processes; that's not something that
+	/// can be turned off without also giving up `DYLD_LIBRARY_PATH` and `@rpath`.
+	///
 	/// @param[in] _filePath Path to the library (extension may be platform-specific, see `BX_DL_EXT`).
 	/// @returns Handle to the loaded library, or NULL on failure.
 	///
 	void* dlopen(const FilePath& _filePath);
+
+	/// Add directory to the dynamic library search path used by `dlopen`.
+	///
+	/// This is the portable counterpart of `AddDllDirectory` on Windows. Since POSIX has no
+	/// equivalent, `dlopen` resolves the registered directories itself, which makes behavior
+	/// identical on all platforms.
+	///
+	/// @param[in] _filePath Directory to add. Relative paths are resolved against the current
+	///   working directory at the time of this call, and are not re-evaluated later.
+	/// @returns True if directory was added, false if it's already present, or if the search
+	///   path is full.
+	///
+	bool dlSearchPathAdd(const FilePath& _filePath);
+
+	/// Remove directory from the dynamic library search path used by `dlopen`.
+	///
+	/// @param[in] _filePath Directory to remove. Resolved the same way as in `dlSearchPathAdd`.
+	/// @returns True if directory was removed, false if it wasn't in the search path.
+	///
+	bool dlSearchPathRemove(const FilePath& _filePath);
 
 	/// Close a dynamic library previously opened with `dlopen`.
 	///

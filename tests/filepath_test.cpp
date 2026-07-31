@@ -194,3 +194,26 @@ TEST_CASE("FilePath special", "[filepath]")
 		DBG("%S", &sv);
 	}
 }
+
+TEST_CASE("FilePath isEqual", "[filepath][string]")
+{
+	// Paths are compared after normalization.
+	REQUIRE( bx::isEqual(bx::FilePath("abv/gd/555"), bx::FilePath("abv//gd/333/../555") ) );
+	REQUIRE( bx::isEqual(bx::FilePath("abv/gd/555"), bx::FilePath("./abv/gd/555") ) );
+	REQUIRE(!bx::isEqual(bx::FilePath("abv/gd/555"), bx::FilePath("abv/gd/333") ) );
+
+	// Relative and absolute paths are never equal.
+	REQUIRE(!bx::isEqual(bx::FilePath("abv/gd"), bx::FilePath("/abv/gd") ) );
+
+	// Case sensitivity is explicitly selectable, regardless of platform default.
+	REQUIRE( bx::isEqual(bx::FilePath("abv/GD"), bx::FilePath("ABV/gd"), false) );
+	REQUIRE(!bx::isEqual(bx::FilePath("abv/GD"), bx::FilePath("ABV/gd"), true) );
+
+	// Default follows platform convention.
+	REQUIRE(bx::kFilePathCaseSensitive != bx::isEqual(bx::FilePath("abv"), bx::FilePath("ABV") ) );
+
+	// Overload must not hijack StringView comparison of string literals.
+	REQUIRE( bx::isEqual("abv", "abv") );
+	REQUIRE(!bx::isEqual("abv", "ABV") );
+	REQUIRE( bx::isEqual("abv", "ABV", false) );
+}
