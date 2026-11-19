@@ -117,7 +117,7 @@ namespace bx
 		{
 			return uintptr_t(readTeb(kTebSelfOffset) );
 		}
-#elif BX_PLATFORM_WINDOWS
+#elif BX_PLATFORM_WINDOWS || BX_PLATFORM_WINRT
 		uintptr_t threadSelf()
 		{
 			return uintptr_t(NtCurrentTeb() );
