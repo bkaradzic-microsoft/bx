@@ -301,9 +301,11 @@ namespace bx
 	struct TlsDataInternal
 	{
 #if BX_CRT_NONE
-#elif BX_PLATFORM_WINDOWS
+#elif  BX_PLATFORM_WINDOWS \
+	|| BX_PLATFORM_WINRT   \
+	|| BX_PLATFORM_XBOXONE
 		uint32_t m_id;
-#elif !(BX_PLATFORM_XBOXONE || BX_PLATFORM_WINRT)
+#else
 		pthread_key_t m_id;
 #endif // BX_PLATFORM_*
 	};
@@ -335,7 +337,9 @@ namespace bx
 		TlsDataInternal* ti = (TlsDataInternal*)m_internal;
 		BX_UNUSED(ti);
 	}
-#elif BX_PLATFORM_WINDOWS
+#elif  BX_PLATFORM_WINDOWS \
+	|| BX_PLATFORM_WINRT   \
+	|| BX_PLATFORM_XBOXONE
 	TlsData::TlsData()
 	{
 		static_assert(sizeof(TlsDataInternal) <= sizeof(m_internal) );
@@ -366,7 +370,7 @@ namespace bx
 		TlsSetValue(ti->m_id, _ptr);
 	}
 
-#elif !(BX_PLATFORM_XBOXONE || BX_PLATFORM_WINRT)
+#else
 
 	TlsData::TlsData()
 	{
