@@ -20,12 +20,17 @@
 #	include <execinfo.h> // backtrace, backtrace_symbols
 #	include <unwind.h>   // _Unwind_Backtrace
 #	include <dlfcn.h>
+#	include <pthread.h>  // pthread_getattr_np, pthread_get_stackaddr_np
 
 #	if BX_PLATFORM_OSX
 #		include <sys/sysctl.h> // sysctl
 #		include <unistd.h>     // getpid
 #	endif // BX_PLATFORM_OSX
 #endif // BX_PLATFORM_*
+
+#if BX_PLATFORM_WINDOWS && BX_CPU_X86 && BX_ARCH_32BIT && defined(_MSC_VER)
+#	include <intrin.h> // __readfsdword
+#endif // BX_PLATFORM_WINDOWS && BX_CPU_X86 && BX_ARCH_32BIT && defined(_MSC_VER)
 
 #ifndef BX_CONFIG_CALLSTACK_USE_EXECINFO
 #	if defined(_EXECINFO_H) || defined(_EXECINFO_H_)
@@ -412,7 +417,52 @@ namespace bx
 #endif // BX_CONFIG_CALLSTACK_USE_EXECINFO
 	}
 
-	inline const uintptr_t* nextStackFrame(const uintptr_t* _stackFrame)
+#if (BX_PLATFORM_LINUX || BX_PLATFORM_OSX) && BX_ARCH_64BIT
+	struct StackBounds
+	{
+		uintptr_t low;
+		uintptr_t high;
+	};
+
+	// Address range of the calling thread's stack, or an empty range when it can't be queried.
+	static StackBounds getThreadStackBounds()
+	{
+		static BX_THREAD_LOCAL StackBounds s_bounds;
+		static BX_THREAD_LOCAL bool        s_valid;
+
+		if (!s_valid)
+		{
+			StackBounds bounds = { 0, 0 };
+
+#	if BX_PLATFORM_LINUX
+			pthread_attr_t attr;
+			if (0 == pthread_getattr_np(pthread_self(), &attr) )
+			{
+				void*  addr = NULL;
+				size_t size = 0;
+				if (0 == pthread_attr_getstack(&attr, &addr, &size) )
+				{
+					bounds.low  = uintptr_t(addr);
+					bounds.high = uintptr_t(addr) + size;
+				}
+
+				pthread_attr_destroy(&attr);
+			}
+#	else
+			const pthread_t self = pthread_self();
+			bounds.high = uintptr_t(pthread_get_stackaddr_np(self) );
+			bounds.low  = bounds.high - pthread_get_stacksize_np(self);
+#	endif // BX_PLATFORM_LINUX
+
+			s_bounds = bounds;
+			s_valid  = true;
+		}
+
+		return s_bounds;
+	}
+#endif // (BX_PLATFORM_LINUX || BX_PLATFORM_OSX) && BX_ARCH_64BIT
+
+	inline const uintptr_t* nextStackFrame(const uintptr_t* _stackFrame, uintptr_t _stackHigh)
 	{
 		const uintptr_t* newStackFrame = (const uintptr_t*)*_stackFrame;
 
@@ -426,14 +476,28 @@ namespace bx
 			return NULL;
 		}
 
+		// Code built without frame pointers leaves an arbitrary value where the saved frame
+		// pointer would be. Stop at anything outside this thread's stack instead of reading it.
+		if (uintptr_t(newStackFrame + 2) > _stackHigh)
+		{
+			return NULL;
+		}
+
 		return newStackFrame;
 	}
 
 	BX_NO_INLINE uint32_t getCallStackSystemVAbi(uint32_t _skip, uint32_t _max, uintptr_t* _outStack)
 	{
-		if constexpr (BX_ENABLED( (BX_PLATFORM_LINUX || BX_PLATFORM_OSX) && BX_ARCH_64BIT) )
+#if (BX_PLATFORM_LINUX || BX_PLATFORM_OSX) && BX_ARCH_64BIT
 		{
+			const StackBounds bounds = getThreadStackBounds();
 			const uintptr_t* stackFrame = (const uintptr_t*)BX_STACK_FRAME_ADDRESS();
+
+			if (uintptr_t(stackFrame) < bounds.low
+			||  uintptr_t(stackFrame + 2) > bounds.high)
+			{
+				return 0;
+			}
 
 			uint32_t num = 0;
 
@@ -454,15 +518,15 @@ namespace bx
 					_outStack[num++] = stackFrame[1];
 				}
 
-				stackFrame = nextStackFrame(stackFrame);
+				stackFrame = nextStackFrame(stackFrame, bounds.high);
 			}
 
 			return num;
 		}
-		else
-		{
-			return 0;
-		}
+#else
+		BX_UNUSED(_skip, _max, _outStack);
+		return 0;
+#endif // (BX_PLATFORM_LINUX || BX_PLATFORM_OSX) && BX_ARCH_64BIT
 	}
 
 	BX_NO_INLINE uint32_t getCallStackGccBuiltin(uint32_t _skip, uint32_t _max, uintptr_t* _outStack)
@@ -591,10 +655,20 @@ namespace bx
 #endif // BX_PLATFORM_WINDOWS
 	}
 
+	inline uintptr_t getWindowsX86StackHigh()
+	{
+#if BX_PLATFORM_WINDOWS && BX_CPU_X86 && BX_ARCH_32BIT && defined(_MSC_VER)
+		return uintptr_t(__readfsdword(0x04) ); // NT_TIB::StackBase
+#else
+		return UINTPTR_MAX;
+#endif // BX_PLATFORM_WINDOWS && BX_CPU_X86 && BX_ARCH_32BIT && defined(_MSC_VER)
+	}
+
 	BX_NO_INLINE uint32_t getCallStackWinAbi(uint32_t _skip, uint32_t _max, uintptr_t* _outStack)
 	{
 		if constexpr (BX_ENABLED(BX_PLATFORM_WINDOWS && BX_CPU_X86 && BX_ARCH_32BIT) )
 		{
+			const uintptr_t  stackHigh  = getWindowsX86StackHigh();
 			const uintptr_t* stackFrame = (uintptr_t*)&_skip - 2;
 
 			uint32_t num = 0;
@@ -616,7 +690,7 @@ namespace bx
 					_outStack[num++] = stackFrame[1];
 				}
 
-				stackFrame = nextStackFrame(stackFrame);
+				stackFrame = nextStackFrame(stackFrame, stackHigh);
 			}
 
 			return num;
